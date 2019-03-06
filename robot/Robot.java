@@ -1,10 +1,3 @@
-/*----------------------------------------------------------------------------*/
-/* Copyright (c) 2017-2018 FIRST. All Rights Reserved.                        */
-/* Open Source Software - may be modified and shared by FRC teams. The code   */
-/* must be accompanied by the FIRST BSD license file in the root directory of */
-/* the project.                                                               */
-/*----------------------------------------------------------------------------*/
-
 package frc.robot;
 
 import com.ctre.phoenix.motorcontrol.ControlMode;
@@ -23,6 +16,7 @@ import frc.robot.subsystems.ExampleSubsystem;
 import edu.wpi.cscore.UsbCamera;
 import edu.wpi.first.cameraserver.CameraServer;
 import edu.wpi.first.wpilibj.AnalogPotentiometer;
+import edu.wpi.first.wpilibj.DigitalInput;
 import edu.wpi.first.wpilibj.interfaces.Potentiometer;
 import edu.wpi.first.wpilibj.Compressor;
 import edu.wpi.first.wpilibj.DoubleSolenoid;
@@ -35,12 +29,7 @@ import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.cscore.UsbCamera;
 import frc.robot.commands.ExampleCommand;
 import frc.robot.subsystems.ExampleSubsystem;
-import jaci.pathfinder.Pathfinder;
-import jaci.pathfinder.Trajectory;
-import jaci.pathfinder.Waypoint;
-import jaci.pathfinder.followers.EncoderFollower;
-import jaci.pathfinder.modifiers.TankModifier;
-import com.kauailabs.navx.frc.AHRS;
+import com.ctre.phoenix.motorcontrol.StatusFrameEnhanced;
 
 /**
  * The VM is configured to automatically run this class, and to call the
@@ -53,42 +42,35 @@ public class Robot extends TimedRobot {
   public static ExampleSubsystem m_subsystem = new ExampleSubsystem();
   public static OI m_oi;
 
+  double bigBoiCounter = 0;
+  double startTime;
+  boolean firstRun = true;
+  boolean count = true;
+
   Command m_autonomousCommand;
   SendableChooser<Command> m_chooser = new SendableChooser<>();
-  double wheelbase_width = 6.25;
 
-  AHRS gyro = new AHRS(Port.kMXP);
+  DoubleSolenoid hatchMechanism = new DoubleSolenoid(2, 3); //Sets up pneumatics
+  Compressor compressor = new Compressor();
 
-  public static Potentiometer armPot = new AnalogPotentiometer(0,360,0);
+/*
+  public static DigitalInput armLimitBottom = new DigitalInput(0);
+  public static DigitalInput armLimitTop = new DigitalInput(1);
+*/
+  public static double armOutput = 0.0;
+  //public static boolean armCanGoUp = false;
+  //public static boolean armCanGoDown = false;
 
   public static boolean sensorInPhase, motorInverted; 
 
-  Trajectory.Config config = new Trajectory.Config(Trajectory.FitMethod.HERMITE_CUBIC, Trajectory.Config.SAMPLES_HIGH, 0.05, 1.7, 2.0, 60.0);
+  double l;
+  double r;
 
-    Waypoint[] points = new Waypoint[] {
-            new Waypoint(-4, -1, Pathfinder.d2r(-45)),
-            new Waypoint(-2, -2, 0),
-            new Waypoint(0, 0, 0)
-    };
+  double gyroHeading;
+  double desiredHeading;
 
-    Trajectory trajectory = Pathfinder.generate(points, config);
-
-    TankModifier modifier = new TankModifier(trajectory).modify(6.25);
-
-    Trajectory leftTrajectory = modifier.getLeftTrajectory();
-    Trajectory rightTrajectory = modifier.getRightTrajectory();
-
-    EncoderFollower leftfollower = new EncoderFollower(modifier.getLeftTrajectory());
-    EncoderFollower rightfollower = new EncoderFollower(modifier.getRightTrajectory());
-
-    double l;
-    double r;
-
-    double gyroHeading;
-    double desiredHeading;
-
-    double angleDifference;
-    double turn;
+  double angleDifference;
+  double turn;
 
   TalonSRX wristLeft = new TalonSRX(13);
   TalonSRX wristRight = new TalonSRX(14);
@@ -118,12 +100,18 @@ public class Robot extends TimedRobot {
   TalonSRX[] right = {right1, right2, right3};
 
   Joystick stick = new Joystick(0);
-  Joystick stick1 = new Joystick(1);
-  Joystick stick2 = new Joystick(2);
+  Joystick stick2 = new Joystick(1);
+  Joystick stick3 = new Joystick(2);
+  Joystick stick4 = new Joystick(3);
 
   boolean foward = true;
-
   boolean previousButton = false;
+
+  boolean pistonsOut = false;
+
+  int multiplier = 1; //Reverses drive team we think
+
+  UsbCamera camera = new UsbCamera("cam0", 0);
 
   /**
    * This function is run when the robot is first started up and should be
@@ -135,10 +123,31 @@ public class Robot extends TimedRobot {
     m_chooser.setDefaultOption("Default Auto", new ExampleCommand());
     // chooser.addOption("My Auto", new MyAutoCommand());
 
-    setupArmPID(0);
+    armLeft.configFactoryDefault();
+    armRight.configFactoryDefault();
+
+    wristLeft.configFactoryDefault();
+    wristRight.configFactoryDefault();
+
+    // wristLeft.setInverted(false);
+    // wristRight.setInverted(true);
+
+    // wristRight.follow(wristLeft);
+
     setupWristPID(0);
+    setupArmPID(0);
+
+    armLeft.setSelectedSensorPosition(0);
+    wristLeft.setSelectedSensorPosition(0);
+
+    
+
+    
+    
 
     SmartDashboard.putData("Auto mode", m_chooser);
+    armLeft.setSelectedSensorPosition(0);
+    wristLeft.setSelectedSensorPosition(0);
   }
 
   public void setMotors (TalonSRX[] left, TalonSRX[] right, double Lspeed, double Rspeed, boolean foward) {
@@ -198,6 +207,19 @@ public class Robot extends TimedRobot {
   public void autonomousInit() {
     m_autonomousCommand = m_chooser.getSelected();
 
+    armRight.setNeutralMode(NeutralMode.Brake);
+    armLeft.setNeutralMode(NeutralMode.Brake);
+    wristRight.setNeutralMode(NeutralMode.Brake);
+    wristLeft.setNeutralMode(NeutralMode.Brake);
+    intake.setNeutralMode(NeutralMode.Brake);
+
+    armRight.follow(armLeft);   
+    
+    armLeft.setInverted(false);
+
+    wristLeft.setInverted(false);
+    wristRight.setInverted(false);
+
     /*
      * String autoSelected = SmartDashboard.getString("Auto Selector",
      * "Default"); switch(autoSelected) { case "My Auto": autonomousCommand
@@ -205,12 +227,6 @@ public class Robot extends TimedRobot {
      * autonomousCommand = new ExampleCommand(); break; }
      */
 
-    // schedule the autonomous command (example)
-    leftfollower.configureEncoder(left1.getSelectedSensorPosition(), 1024, 6.25);
-    rightfollower.configureEncoder(right1.getSelectedSensorPosition(), 1024, 6.25);
-
-    leftfollower.configurePIDVA(1.0, 0.0, 0.0, 1 / 5, 0);
-    rightfollower.configurePIDVA(1.0, 0.0, 0.0, 1 / 5, 0);
 
     if (m_autonomousCommand != null) {
       m_autonomousCommand.start();
@@ -223,36 +239,222 @@ public class Robot extends TimedRobot {
   @Override
   public void autonomousPeriodic() {
     Scheduler.getInstance().run();
-    l = leftfollower.calculate(left1.getSelectedSensorPosition(0));
-    r = rightfollower.calculate(right1.getSelectedSensorPosition(0));
+    double armTicks = 140;
+    double wristTicks = 25;
+  
+    //Basic manual drivetrain, with reversable stearing
+    //--------------------------------------------
+    /*
+    if (!previousButton && stick.getRawButton(1)) {
+	    foward = !foward;
+    }
+    previousButton = stick.getRawButton(1);
+    SmartDashboard.putBoolean("Button", stick.getRawButton(1));
+    SmartDashboard.putBoolean("Fowards", foward);
+    setMotors(left, right, -1 * stick.getRawAxis(1), -1 * stick1.getRawAxis(1), foward);
+    SmartDashboard.putNumber("leftStick", stick.getRawAxis(1));
 
-    gyroHeading = gyro.getAngle();
-    desiredHeading = Pathfinder.r2d(leftfollower.getHeading());
+	  SmartDashboard.putBoolean("armButton", stick.getRawButton(3));
+	
+    armLeft.set(ControlMode.Position, ticks);
+    */
+    //armRight.set(ControlMode.Position, ticks);
 
-    angleDifference = Pathfinder.boundHalfDegrees(desiredHeading - gyroHeading);
-    turn = 0.03 * angleDifference; // 0.8 * (1.0/80.0)
+    if(stick.getRawButtonPressed(1)) {
+      foward = !foward;
+    }
+    //SmartDashboard.putNumber("Multiplier", multiplier);
 
-    double leftVal = l + turn;
-    double rightVal = r + turn;
+    double rightSpeed = -stick.getRawAxis(1) * multiplier;
+    double leftSpeed = -stick2.getRawAxis(1) * multiplier;
+    
+    SmartDashboard.putBoolean("Forward", foward);
+    if(foward) {
+      for(TalonSRX x : right) {
+        x.set(ControlMode.PercentOutput, -rightSpeed);
+      }
+      for(TalonSRX x : left) {
+        x.set(ControlMode.PercentOutput, leftSpeed);
+      }
+    } else {
+      for(TalonSRX x : right) {
+        x.set(ControlMode.PercentOutput, leftSpeed);
+      }
+      for(TalonSRX x : left) {
+        x.set(ControlMode.PercentOutput, -rightSpeed);
+      }
+    }
+    /** 
+    right1.set(ControlMode.PercentOutput, -rightSpeed);
+    right2.set(ControlMode.PercentOutput, -rightSpeed);
+    right3.set(ControlMode.PercentOutput, -rightSpeed);
+    left1.set(ControlMode.PercentOutput, leftSpeed);
+    left2.set(ControlMode.PercentOutput, leftSpeed);
+    left3.set(ControlMode.PercentOutput, leftSpeed);
+    */
 
-    if (leftVal > 1.0) {
-      leftVal = 1.0;
-    } else if (leftVal < -1.0) {
-      leftVal = -1.0;
+    /*
+    if (!armLimitBottom.get()) {
+      armCanGoDown = true;
     }
 
-    if (rightVal > 1.0) {
-      rightVal = 1.0;
-    } else if (rightVal < -1.0) {
-      rightVal = -1.0;
+    if (!armLimitTop.get()) {
+      armCanGoUp = true;
+    }
+    */
+    boolean wristRightinverted = true;
+    //TODO: Comment all of these with their actual positions
+    if (stick3.getRawButton(3)) {
+      armLeft.set(ControlMode.MotionMagic, 70);
+      wristLeft.set(ControlMode.MotionMagic, 95);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    } 
+
+    if (stick3.getRawButton(5)) {
+      armLeft.set(ControlMode.MotionMagic, 0);
+      wristLeft.set(ControlMode.MotionMagic, 63);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    } 
+
+    if (stick3.getRawButton(8)){
+      armLeft.set(ControlMode.MotionMagic, 220);
+      wristLeft.set(ControlMode.MotionMagic, -50);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+      //hatchMechanism.set(DoubleSolenoid.Value.kForward);  Depreciated PizzaStubs, remove or change as needed
+      pistonsOut = true;
+    }
+    if (stick3.getRawButton(10)){
+      armLeft.set(ControlMode.MotionMagic, 10);
+      wristLeft.set(ControlMode.MotionMagic, 10);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
     }
 
-    right1.set(ControlMode.PercentOutput, rightVal);
-    right2.set(ControlMode.PercentOutput, rightVal);
-    right3.set(ControlMode.PercentOutput, rightVal);
-    left1.set(ControlMode.PercentOutput, leftVal);
-    left2.set(ControlMode.PercentOutput, leftVal);
-    left3.set(ControlMode.PercentOutput, leftVal);
+    
+
+    if (stick3.getRawButton(2)) {
+      armLeft.set(ControlMode.MotionMagic, 73);
+      wristLeft.set(ControlMode.MotionMagic, 53);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+      
+
+    if (stick3.getRawButton(11)) {
+      armLeft.set(ControlMode.MotionMagic, 225);
+      wristLeft.set(ControlMode.MotionMagic, 50);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    if (stick3.getRawButton(6)) {
+      Intake.set(ControlMode.PercentOutput, 1.0);
+    } else if (stick3.getRawButton(7)) {
+      Intake.set(ControlMode.PercentOutput, -1.0);
+    } else {
+      Intake.set(ControlMode.PercentOutput, 0);
+    }
+    /* Depreciated PizzaStubs.  Change to match whatever is added or remove
+    if (stick3.getRawButtonPressed(1)) {
+      pistonsOut = !pistonsOut;
+      if(pistonsOut)
+        hatchMechanism.set(DoubleSolenoid.Value.kForward);
+      else
+        hatchMechanism.set(DoubleSolenoid.Value.kReverse);
+    }
+    */
+    if (stick.getRawButton(2)) {
+      armLeft.set(ControlMode.MotionMagic, 37);
+      wristLeft.set(ControlMode.MotionMagic, 18);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    if (stick.getRawButton(3)) {
+      armLeft.set(ControlMode.MotionMagic, 65);
+      wristLeft.set(ControlMode.MotionMagic, 18);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    //----------------------------------------------
+    //Manual Control
+    //Wrist
+    if (stick4.getRawButton(6)) {  //Far-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, 0.75);
+      wristRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, -0.75);
+      wristRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      wristLeft.set(ControlMode.PercentOutput, 0);
+      wristRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    //Manual arm control
+    if (stick4.getRawButton(11)) { //Far-Right button on base
+      armLeft.set(ControlMode.PercentOutput, 0.75);
+      armRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Right button on base
+      armLeft.set(ControlMode.PercentOutput, -0.75);
+      armRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      armLeft.set(ControlMode.PercentOutput, 0);
+      armRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    SmartDashboard.putNumber("Wrist motor output", wristLeft.getMotorOutputPercent());
+
+    // if (stick3.getRawButton(6)){
+    //   wristLeft.set(ControlMode.MotionMagic, 25);
+    //   wristRight.setInverted(wristRightinverted);
+    //   wristRight.follow(wristLeft);
+    // }
+    // if (stick3.getRawButton(7)){
+    //   wristLeft.set(ControlMode.MotionMagic, 0);
+    //   wristRight.setInverted(wristRightinverted);
+    //   wristRight.follow(wristLeft);
+    // }
+
+    if (stick3.getRawButton(9)) {
+      armLeft.set(ControlMode.MotionMagic, -50);
+      wristLeft.set(ControlMode.MotionMagic, -5);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    //----------------------------------------------
+    //Manual Control
+    //Wrist
+    if (stick4.getRawButton(6)) {  //Far-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, 0.75);
+      wristRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, -0.75);
+      wristRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      wristLeft.set(ControlMode.PercentOutput, 0);
+      wristRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    //Manual arm control
+    if (stick4.getRawButton(11)) { //Far-Right button on base
+      armLeft.set(ControlMode.PercentOutput, 0.75);
+      armRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Right button on base
+      armLeft.set(ControlMode.PercentOutput, -0.75);
+      armRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      armLeft.set(ControlMode.PercentOutput, 0);
+      armRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    SmartDashboard.putNumber("ArmPot Position", armLeft.getSelectedSensorPosition()); //Added by Nikhil, reports Pot position
+    SmartDashboard.putNumber("WristPot Position", wristLeft.getSelectedSensorPosition());
+    SmartDashboard.putBoolean("Pistons Out", pistonsOut);
   }
 
   @Override
@@ -264,19 +466,23 @@ public class Robot extends TimedRobot {
     if (m_autonomousCommand != null) {
       m_autonomousCommand.cancel();
     }
+    
     armRight.setNeutralMode(NeutralMode.Brake);
     armLeft.setNeutralMode(NeutralMode.Brake);
     wristRight.setNeutralMode(NeutralMode.Brake);
     wristLeft.setNeutralMode(NeutralMode.Brake);
     intake.setNeutralMode(NeutralMode.Brake);
 
-    armLeft.setInverted(false);
-    armRight.setInverted(false);
-
+    armRight.follow(armLeft);   
     
+    armLeft.setInverted(false);
 
     wristLeft.setInverted(false);
     wristRight.setInverted(false);
+    /* Depreciated PizzaStubs code, replace as needed
+    compressor.start();
+    hatchMechanism.set(DoubleSolenoid.Value.kOff);
+    */
   }
 
   /**
@@ -284,10 +490,40 @@ public class Robot extends TimedRobot {
    */
   @Override
   public void teleopPeriodic() {
+
+    //This is a counter to find what value to adjust the arm with.  Remove when done
+    if (firstRun) {
+      startTime = System.currentTimeMillis();
+      firstRun = false;
+    }
+    SmartDashboard.putBoolean("firstRun", firstRun);
+
+    if (count) {
+      bigBoiCounter++;
+    }
+
+    SmartDashboard.putNumber("Counter", bigBoiCounter);
+
+    SmartDashboard.putNumber("Time Elapsed", System.currentTimeMillis() - startTime);
+
+    if ((System.currentTimeMillis() - startTime) > 30000) {
+      SmartDashboard.putNumber("Cycles Per Second", bigBoiCounter / 30);
+      count = false;
+    } else {
+      SmartDashboard.putNumber("Cycles Per Second", 0);
+    }
+
+    //End Counter
+    //----------------------------------------------------------------
+
+    double armTicks = 140;
+    double wristTicks = 25;
+  
     //Basic manual drivetrain, with reversable stearing
     //--------------------------------------------
+    /*
     if (!previousButton && stick.getRawButton(1)) {
-      foward = !foward;
+	    foward = !foward;
     }
     previousButton = stick.getRawButton(1);
     SmartDashboard.putBoolean("Button", stick.getRawButton(1));
@@ -295,33 +531,139 @@ public class Robot extends TimedRobot {
     setMotors(left, right, -1 * stick.getRawAxis(1), -1 * stick1.getRawAxis(1), foward);
     SmartDashboard.putNumber("leftStick", stick.getRawAxis(1));
 
-    SmartDashboard.putBoolean("armButton", stick.getRawButton(3));
+	  SmartDashboard.putBoolean("armButton", stick.getRawButton(3));
+	
+    armLeft.set(ControlMode.Position, ticks);
+    */
+    //armRight.set(ControlMode.Position, ticks);
 
+    if(stick.getRawButtonPressed(1)) {
+      foward = !foward;
+    }
+    //SmartDashboard.putNumber("Multiplier", multiplier);
 
-    SmartDashboard.putNumber("ArmPot Position", armPot.get()); //Added by Nikhil, reports Pot position
-
-    /*  This controls the arm and wrist manually, we'll probably change most of this
-    if (stick2.getRawButton(3)) {
-      armRight.set(ControlMode.PercentOutput, -0.75);
-      armLeft.set(ControlMode.PercentOutput, 0.75);
-    } else if (stick2.getRawButton(2)) {
-      armRight.set(ControlMode.PercentOutput, 0.75);
-      armLeft.set(ControlMode.PercentOutput, -0.75);
-    } else if (stick2.getRawButton(6)) {
-      armRight.set(ControlMode.PercentOutput, -0.15);
-      armLeft.set(ControlMode.PercentOutput, 0.15);
-    } else if (stick2.getRawButton(7)) {
-      armRight.set(ControlMode.PercentOutput, 0.15);
-      armLeft.set(ControlMode.PercentOutput, -0.15);
+    double rightSpeed = -stick.getRawAxis(1) * multiplier;
+    double leftSpeed = -stick2.getRawAxis(1) * multiplier;
+    
+    SmartDashboard.putBoolean("Forward", foward);
+    if(foward) {
+      for(TalonSRX x : right) {
+        x.set(ControlMode.PercentOutput, -rightSpeed);
+      }
+      for(TalonSRX x : left) {
+        x.set(ControlMode.PercentOutput, leftSpeed);
+      }
     } else {
-      armRight.set(ControlMode.PercentOutput, 0);
-      armLeft.set(ControlMode.PercentOutput, 0);
+      for(TalonSRX x : right) {
+        x.set(ControlMode.PercentOutput, leftSpeed);
+      }
+      for(TalonSRX x : left) {
+        x.set(ControlMode.PercentOutput, -rightSpeed);
+      }
+    }
+    /** 
+    right1.set(ControlMode.PercentOutput, -rightSpeed);
+    right2.set(ControlMode.PercentOutput, -rightSpeed);
+    right3.set(ControlMode.PercentOutput, -rightSpeed);
+    left1.set(ControlMode.PercentOutput, leftSpeed);
+    left2.set(ControlMode.PercentOutput, leftSpeed);
+    left3.set(ControlMode.PercentOutput, leftSpeed);
+    */
+
+    /*
+    if (!armLimitBottom.get()) {
+      armCanGoDown = true;
     }
 
-    if (stick2.getRawButton(4)) {
+    if (!armLimitTop.get()) {
+      armCanGoUp = true;
+    }
+    */
+    boolean wristRightinverted = true;
+    //TODO: Comment all of these with their actual positions
+    if (stick3.getRawButton(3)) {
+      armLeft.set(ControlMode.MotionMagic, 70);
+      wristLeft.set(ControlMode.MotionMagic, 95);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    } 
+
+    if (stick3.getRawButton(5)) {
+      armLeft.set(ControlMode.MotionMagic, 0);
+      wristLeft.set(ControlMode.MotionMagic, 63);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    } 
+
+    if (stick3.getRawButton(8)){
+      armLeft.set(ControlMode.MotionMagic, 220);
+      wristLeft.set(ControlMode.MotionMagic, -50);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+      //hatchMechanism.set(DoubleSolenoid.Value.kForward);  Depreciated PizzaStubs, remove or change as needed
+      pistonsOut = true;
+    }
+    if (stick3.getRawButton(10)){
+      armLeft.set(ControlMode.MotionMagic, 10);
+      wristLeft.set(ControlMode.MotionMagic, 10);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    
+
+    if (stick3.getRawButton(2)) {
+      armLeft.set(ControlMode.MotionMagic, 73);
+      wristLeft.set(ControlMode.MotionMagic, 53);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+      
+
+    if (stick3.getRawButton(11)) {
+      armLeft.set(ControlMode.MotionMagic, 225);
+      wristLeft.set(ControlMode.MotionMagic, 50);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    if (stick3.getRawButton(6)) {
+      Intake.set(ControlMode.PercentOutput, 1.0);
+    } else if (stick3.getRawButton(7)) {
+      Intake.set(ControlMode.PercentOutput, -1.0);
+    } else {
+      Intake.set(ControlMode.PercentOutput, 0);
+    }
+    /* Depreciated PizzaStubs.  Change to match whatever is added or remove
+    if (stick3.getRawButtonPressed(1)) {
+      pistonsOut = !pistonsOut;
+      if(pistonsOut)
+        hatchMechanism.set(DoubleSolenoid.Value.kForward);
+      else
+        hatchMechanism.set(DoubleSolenoid.Value.kReverse);
+    }
+    */
+    if (stick.getRawButton(2)) {
+      armLeft.set(ControlMode.MotionMagic, 37);
+      wristLeft.set(ControlMode.MotionMagic, 18);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    if (stick.getRawButton(3)) {
+      armLeft.set(ControlMode.MotionMagic, 65);
+      wristLeft.set(ControlMode.MotionMagic, 18);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    //----------------------------------------------
+    //Manual Control
+    //Wrist
+    if (stick4.getRawButton(6)) {  //Far-Left button on base
       wristLeft.set(ControlMode.PercentOutput, 0.75);
       wristRight.set(ControlMode.PercentOutput, -0.75);
-    } else if (stick2.getRawButton(5)) {
+    } else if (stick4.getRawButton(7)) { //Close-Left button on base
       wristLeft.set(ControlMode.PercentOutput, -0.75);
       wristRight.set(ControlMode.PercentOutput, 0.75);
     } else {
@@ -329,73 +671,138 @@ public class Robot extends TimedRobot {
       wristRight.set(ControlMode.PercentOutput, 0);
     }
 
-    */
-
-    if(stick2.getRawButton(11)) { //Manually runs intake
-      intake.set(ControlMode.PercentOutput, 1);
-    } else if (stick2.getRawButton(10)) {
-      intake.set(ControlMode.PercentOutput, -1);
+    //Manual arm control
+    if (stick4.getRawButton(11)) { //Far-Right button on base
+      armLeft.set(ControlMode.PercentOutput, 0.75);
+      armRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Right button on base
+      armLeft.set(ControlMode.PercentOutput, -0.75);
+      armRight.set(ControlMode.PercentOutput, 0.75);
     } else {
-      intake.set(ControlMode.PercentOutput, 0);
+      armLeft.set(ControlMode.PercentOutput, 0);
+      armRight.set(ControlMode.PercentOutput, 0);
     }
+
+    SmartDashboard.putNumber("Wrist motor output", wristLeft.getMotorOutputPercent());
+
+    // if (stick3.getRawButton(6)){
+    //   wristLeft.set(ControlMode.MotionMagic, 25);
+    //   wristRight.setInverted(wristRightinverted);
+    //   wristRight.follow(wristLeft);
+    // }
+    // if (stick3.getRawButton(7)){
+    //   wristLeft.set(ControlMode.MotionMagic, 0);
+    //   wristRight.setInverted(wristRightinverted);
+    //   wristRight.follow(wristLeft);
+    // }
+
+    if (stick3.getRawButton(9)) {
+      armLeft.set(ControlMode.MotionMagic, -50);
+      wristLeft.set(ControlMode.MotionMagic, -5);
+      wristRight.setInverted(wristRightinverted);
+      wristRight.follow(wristLeft);
+    }
+
+    //----------------------------------------------
+    //Manual Control
+    //Wrist
+    if (stick4.getRawButton(6)) {  //Far-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, 0.75);
+      wristRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Left button on base
+      wristLeft.set(ControlMode.PercentOutput, -0.75);
+      wristRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      wristLeft.set(ControlMode.PercentOutput, 0);
+      wristRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    //Manual arm control
+    if (stick4.getRawButton(11)) { //Far-Right button on base
+      armLeft.set(ControlMode.PercentOutput, 0.75);
+      armRight.set(ControlMode.PercentOutput, -0.75);
+    } else if (stick4.getRawButton(7)) { //Close-Right button on base
+      armLeft.set(ControlMode.PercentOutput, -0.75);
+      armRight.set(ControlMode.PercentOutput, 0.75);
+    } else {
+      armLeft.set(ControlMode.PercentOutput, 0);
+      armRight.set(ControlMode.PercentOutput, 0);
+    }
+
+    SmartDashboard.putNumber("ArmPot Position", armLeft.getSelectedSensorPosition()); //Added by Nikhil, reports Pot position
+    SmartDashboard.putNumber("WristPot Position", wristLeft.getSelectedSensorPosition());
+    SmartDashboard.putBoolean("Pistons Out", pistonsOut);
 
     Scheduler.getInstance().run();
   }
 
-  /**
-   * This function is called periodically during test mode.
-   */
-  @Override
-  public void testPeriodic() {
-  }
+    /**
+     * This function is called periodically during test mode.
+     */
+    @Override
+  public void testPeriodic() {}
 
   public void setupArmPID(int pidSlot) {
-    sensorInPhase = true;
-    motorInverted = false;
+    sensorInPhase = false;
+    motorInverted = true;
 
     armRight.follow(armLeft);
 
+    
+
+    armLeft.configSelectedFeedbackSensor(FeedbackDevice.Analog, Constants.kPIDLoopIdx, Constants.kTimeoutMs);
+
     armLeft.setInverted(motorInverted);
     armRight.setInverted(motorInverted);
+
+    armLeft.setStatusFramePeriod(StatusFrameEnhanced.Status_13_Base_PIDF0, 10, Constants.kTimeoutMs);
+    armLeft.setStatusFramePeriod(StatusFrameEnhanced.Status_10_MotionMagic, 10, Constants.kTimeoutMs);
       
-    armLeft.configSelectedFeedbackSensor(FeedbackDevice.Analog, pidSlot, 10);
-		armLeft.setSensorPhase(sensorInPhase);
-		
-	  armLeft.configAllowableClosedloopError(pidSlot, Constants.maxArmError, 10);
-		
-		armLeft.configNominalOutputForward(0, 10);
-		armLeft.configNominalOutputReverse(0, 10);
-		armLeft.configPeakOutputForward(Constants.maxArmSpeed, 10);
-		armLeft.configPeakOutputReverse(-Constants.maxArmSpeed, 10);
-		
-		armLeft.config_kF(0, 0.0, 10);
-		armLeft.config_kP(0, Constants.armKP, 10);
-		armLeft.config_kI(0, Constants.armKI, 10);
-		armLeft.config_kD(0, Constants.armKD, 10);
+    armLeft.configNominalOutputForward(0, 10);
+    armLeft.configNominalOutputReverse(0, 10);
+    armLeft.configPeakOutputForward(Constants.maxArmSpeed, 10);
+    armLeft.configPeakOutputReverse(-Constants.maxArmSpeed, 10);
+      
+    armLeft.selectProfileSlot(Constants.kSlotIdx, Constants.kPIDLoopIdx);
+    armLeft.config_kF(0, 0.0, 10);
+    armLeft.config_kP(0, Constants.armKP, 10);
+    armLeft.config_kI(0, Constants.armKI, 10);
+    armLeft.config_kD(0, Constants.armKD, 10);
+      
+    armLeft.configMotionCruiseVelocity(15000, Constants.kTimeoutMs);
+    armLeft.configMotionAcceleration(6000, Constants.kTimeoutMs);
+      
+    armLeft.setSelectedSensorPosition(0, Constants.kPIDLoopIdx, Constants.kTimeoutMs);
   }
 
   public void setupWristPID(int pidSlot) {
     sensorInPhase = true;
     motorInverted = false;
 
-    wristRight.follow(wristLeft);
+    wristLeft.setInverted(motorInverted);
+    wristRight.setInverted(motorInverted);
 
-    wristLeft.setInverted(motorInverted);
-    wristLeft.setInverted(motorInverted);
-    
-    wristLeft.configSelectedFeedbackSensor(FeedbackDevice.Analog, pidSlot, 10);
-    wristLeft.setSensorPhase(sensorInPhase);
-  
-    wristLeft.configAllowableClosedloopError(pidSlot, Constants.maxWristError, 10);
-  
+    wristLeft.configSelectedFeedbackSensor(FeedbackDevice.Analog
+                                            ,Constants.kPIDLoopIdx 
+                                            ,Constants.kTimeoutMs);
+
+    wristLeft.setStatusFramePeriod(StatusFrameEnhanced.Status_13_Base_PIDF0, 10, Constants.kTimeoutMs);
+    wristLeft.setStatusFramePeriod(StatusFrameEnhanced.Status_10_MotionMagic, 10, Constants.kTimeoutMs);
+      
     wristLeft.configNominalOutputForward(0, 10);
     wristLeft.configNominalOutputReverse(0, 10);
     wristLeft.configPeakOutputForward(Constants.maxWristSpeed, 10);
     wristLeft.configPeakOutputReverse(-Constants.maxWristSpeed, 10);
-  
+      
+    wristLeft.selectProfileSlot(Constants.kSlotIdx, Constants.kPIDLoopIdx);
     wristLeft.config_kF(0, 0.0, 10);
     wristLeft.config_kP(0, Constants.wristKP, 10);
     wristLeft.config_kI(0, Constants.wristKI, 10);
     wristLeft.config_kD(0, Constants.wristKD, 10);
+      
+    wristLeft.configMotionCruiseVelocity(15000, Constants.kTimeoutMs);
+    wristLeft.configMotionAcceleration(6000, Constants.kTimeoutMs);
+      
+    wristLeft.setSelectedSensorPosition(0, Constants.kPIDLoopIdx, Constants.kTimeoutMs);
   }
 }
